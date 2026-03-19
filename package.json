@@ -1,0 +1,33 @@
+{
+  "name": "piggy",
+  "version": "0.1.0",
+  "description": "AI-powered computer-use agent with 3D mouse simulation, human-like path generation, and vision-based navigation",
+  "main": "main.js",
+  "scripts": {
+    "start": "unset ELECTRON_RUN_AS_NODE && electron .",
+    "rebuild": "electron-rebuild"
+  },
+  "author": "Idrissi <ahmed@idravision.com>",
+  "license": "MIT",
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "keywords": [
+    "computer-use",
+    "ai-agent",
+    "mouse-simulation",
+    "automation",
+    "vision",
+    "electron",
+    "threejs"
+  ],
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "electron": "^41.0.3",
+    "openai": "^6.32.0",
+    "robotjs": "^0.7.0",
+    "three": "^0.183.2"
+  }
+}

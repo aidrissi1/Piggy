@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Piggy</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0f;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    #header {
+      padding: 10px 20px;
+      background: rgba(0,0,0,0.5);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 10;
+    }
+    #header h1 { font-size: 1.1rem; font-weight: 700; }
+    #header h1 .brand { color: #a855f7; }
+    #controls-info { font-size: 0.72rem; color: #555; display: flex; gap: 12px; }
+    #controls-info kbd {
+      background: rgba(255,255,255,0.08); padding: 2px 6px;
+      border-radius: 4px; font-size: 0.68rem;
+    }
+
+    /* ── Layout ── */
+    #main-layout { flex: 1; display: flex; overflow: hidden; }
+
+    #scene-container { flex: 1; position: relative; }
+    canvas { display: block; }
+
+    /* ── Panel ── */
+    #panel {
+      width: 290px;
+      background: rgba(0,0,0,0.4);
+      border-left: 1px solid rgba(255,255,255,0.1);
+      padding: 14px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .section {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .section h3 {
+      font-size: 0.75rem; color: #a855f7; margin-bottom: 8px;
+      text-transform: uppercase; letter-spacing: 1px;
+    }
+
+    .row { display: flex; gap: 8px; margin-bottom: 6px; }
+    .row label { font-size: 0.75rem; color: #666; width: 26px; line-height: 28px; }
+    .row input[type="number"] {
+      flex: 1; padding: 5px 8px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04); color: #fff; font-size: 0.8rem;
+    }
+    .row input[type="text"], #ai-task {
+      width: 100%; padding: 7px 10px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04); color: #fff; font-size: 0.78rem;
+      margin-bottom: 6px;
+    }
+
+    .btn {
+      width: 100%; padding: 9px; border-radius: 8px; border: none;
+      font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+    .btn-blue   { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; }
+    .btn-green  { background: linear-gradient(135deg, #10b981, #059669); color: #fff; }
+    .btn-red    { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; }
+    .btn-purple { background: linear-gradient(135deg, #a855f7, #7c3aed); color: #fff; }
+
+    .status { font-size: 0.72rem; color: #888; margin-top: 6px; min-height: 16px; }
+
+    /* ── Screen Viewer ── */
+    #screen-viewer {
+      position: relative;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      overflow: hidden;
+      background: #000;
+    }
+    #screen-viewer img {
+      width: 100%; display: block; border-radius: 5px;
+    }
+    #screen-nav {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 6px;
+    }
+    #screen-nav button {
+      padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.05); color: #aaa; font-size: 0.7rem; cursor: pointer;
+    }
+    #screen-nav button:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    #screen-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
+    #screen-counter { font-size: 0.68rem; color: #555; }
+    #screen-time { font-size: 0.65rem; color: #444; text-align: center; margin-top: 3px; }
+    .no-screenshot { text-align: center; padding: 20px 0; color: #444; font-size: 0.75rem; }
+
+    /* ── HUD ── */
+    #hud {
+      position: absolute; bottom: 16px; left: 16px;
+      background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px; padding: 10px 14px; font-size: 0.75rem;
+    }
+    #hud .r { display: flex; justify-content: space-between; gap: 18px; margin-bottom: 2px; }
+    #hud .l { color: #666; }
+    #hud .v { color: #a855f7; font-weight: 600; }
+
+    #mode-indicator {
+      position: absolute; top: 16px; right: 16px;
+      padding: 5px 12px; border-radius: 8px; font-size: 0.78rem; font-weight: 600;
+    }
+    #mode-indicator.keyboard {
+      background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: #3b82f6;
+    }
+    #mode-indicator.ai {
+      background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.3); color: #a855f7;
+    }
+
+    #speed-bar {
+      position: absolute; bottom: 16px; right: 16px;
+      background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px; padding: 8px 12px; font-size: 0.72rem;
+    }
+    #speed-bar .l { color: #666; margin-bottom: 3px; }
+    #speed-slider { width: 90px; accent-color: #a855f7; }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h1><span class="brand">Piggy</span></h1>
+    <div id="controls-info">
+      <span><kbd>WASD</kbd> Move</span>
+      <span><kbd>Space</kbd> Click</span>
+      <span><kbd>Q/E</kbd> Scroll</span>
+      <span><kbd>Shift+Scroll</kbd> Zoom</span>
+      <span><kbd>Shift+Drag</kbd> Rotate</span>
+    </div>
+  </div>
+
+  <div id="main-layout">
+    <div id="scene-container">
+      <canvas id="canvas"></canvas>
+      <div id="hud">
+        <div class="r"><span class="l">X:</span><span class="v" id="hud-x">0</span></div>
+        <div class="r"><span class="l">Y:</span><span class="v" id="hud-y">0</span></div>
+        <div class="r"><span class="l">Vel:</span><span class="v" id="hud-vel">0</span></div>
+      </div>
+      <div id="mode-indicator" class="keyboard">KEYBOARD</div>
+      <div id="speed-bar">
+        <div class="l">Speed: <span id="speed-val">5</span></div>
+        <input type="range" id="speed-slider" min="1" max="20" value="5">
+      </div>
+    </div>
+
+    <div id="panel">
+      <!-- Screen Viewer -->
+      <div class="section">
+        <h3>Screen</h3>
+        <button class="btn btn-blue" id="btn-screenshot">Capture</button>
+        <div id="screen-viewer" style="margin-top:8px;">
+          <div class="no-screenshot" id="no-shot-msg">No screenshots yet</div>
+          <img id="screen-img" alt="" style="display:none;">
+        </div>
+        <div id="screen-nav" style="display:none;">
+          <button id="btn-prev">&lt;</button>
+          <span id="screen-counter">0/0</span>
+          <button id="btn-del" style="color:#ef4444;">Del</button>
+          <button id="btn-next">&gt;</button>
+        </div>
+        <div id="screen-time"></div>
+      </div>
+
+      <!-- Move -->
+      <div class="section">
+        <h3>Move</h3>
+        <div class="row">
+          <label>X:</label><input type="number" id="target-x" value="500" min="0">
+        </div>
+        <div class="row">
+          <label>Y:</label><input type="number" id="target-y" value="300" min="0">
+        </div>
+        <button class="btn btn-green" id="btn-move">Go</button>
+        <div class="status" id="move-status"></div>
+      </div>
+
+      <!-- Click -->
+      <div class="section">
+        <h3>Click</h3>
+        <div class="row">
+          <label>X:</label><input type="number" id="click-x" value="500" min="0">
+        </div>
+        <div class="row">
+          <label>Y:</label><input type="number" id="click-y" value="300" min="0">
+        </div>
+        <button class="btn btn-purple" id="btn-click">Go & Click</button>
+      </div>
+
+      <!-- AI -->
+      <div class="section">
+        <h3>AI Agent</h3>
+        <input type="text" id="ai-task" placeholder="Describe what to do...">
+        <button class="btn btn-purple" id="btn-ai-run">Run</button>
+        <div class="status" id="ai-status"></div>
+      </div>
+
+      <!-- Stop -->
+      <div class="section">
+        <button class="btn btn-red" id="btn-stop">Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
