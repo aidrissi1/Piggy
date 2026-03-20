@@ -18,10 +18,12 @@ const api = {
   clickCursor:    (btn)    => ipcRenderer.invoke('click-cursor', { button: btn }),
   getCursorPos:   ()       => ipcRenderer.invoke('get-cursor-pos'),
   scrollCursor:   (dy)     => ipcRenderer.invoke('scroll-cursor', { dy }),
-  takeScreenshot: ()       => ipcRenderer.invoke('take-screenshot'),
+  takeScreenshot: (mode)   => ipcRenderer.invoke('take-screenshot', { mode: mode || 'screen' }),
   previewPath:    (x, y)   => ipcRenderer.invoke('preview-path', { targetX: x, targetY: y }),
   executeMove:    (x, y)   => ipcRenderer.invoke('execute-move', { targetX: x, targetY: y }),
   executeClick:   (x, y, b) => ipcRenderer.invoke('execute-click', { targetX: x, targetY: y, button: b }),
+  executeType:    (text)   => ipcRenderer.invoke('execute-type', { text }),
+  executeKey:     (key, mods) => ipcRenderer.invoke('execute-key', { key, modifiers: mods }),
   stopMovement:   ()       => ipcRenderer.invoke('stop-movement')
 };
 
@@ -99,21 +101,22 @@ const frame = new THREE.Mesh(frameGeo, frameMat);
 frame.position.set(0, 2.25, 0);
 monitorGrp.add(frame);
 
-// Screen surface (where screenshot texture goes)
-const screenGeo = new THREE.PlaneGeometry(5.2, 3.0);
+// Screen surface — 16:10 aspect ratio to match macOS, high-res canvas
+const screenGeo = new THREE.PlaneGeometry(5.0, 3.125);
 const screenCanvas = document.createElement('canvas');
-screenCanvas.width = 800;
-screenCanvas.height = 450;
+screenCanvas.width = 1600;
+screenCanvas.height = 1000;
 const screenCtx = screenCanvas.getContext('2d');
 screenCtx.fillStyle = '#0a0a12';
-screenCtx.fillRect(0, 0, 800, 450);
+screenCtx.fillRect(0, 0, 1600, 1000);
 screenCtx.fillStyle = '#333';
-screenCtx.font = '24px sans-serif';
+screenCtx.font = '36px sans-serif';
 screenCtx.textAlign = 'center';
-screenCtx.fillText('No screenshot yet', 400, 230);
+screenCtx.fillText('No screenshot yet', 800, 510);
 
 const screenTex = new THREE.CanvasTexture(screenCanvas);
 screenTex.minFilter = THREE.LinearFilter;
+screenTex.magFilter = THREE.LinearFilter;
 const screenMat = new THREE.MeshBasicMaterial({ map: screenTex });
 const screenMesh = new THREE.Mesh(screenGeo, screenMat);
 screenMesh.position.set(0, 2.25, 0.06);
@@ -133,8 +136,8 @@ scene.add(monitorGrp);
 function updateMonitorScreen(base64) {
   const img = new Image();
   img.onload = () => {
-    screenCtx.clearRect(0, 0, 800, 450);
-    screenCtx.drawImage(img, 0, 0, 800, 450);
+    screenCtx.clearRect(0, 0, 1600, 1000);
+    screenCtx.drawImage(img, 0, 0, 1600, 1000);
     screenTex.needsUpdate = true;
   };
   img.src = `data:image/png;base64,${base64}`;
@@ -193,6 +196,124 @@ mouseGrp.add(new THREE.Mesh(
 
 scene.add(mouseGrp);
 
+// ── 3D Keyboard ───────────────────────────────────────────
+
+const kbGroup = new THREE.Group();
+const keyMeshes = {};
+
+const ROWS = [
+  { chars: '1234567890',  z: -0.75, w: 0.26, xOff: 0 },
+  { chars: 'qwertyuiop',  z: -0.40, w: 0.26, xOff: 0 },
+  { chars: 'asdfghjkl',   z: -0.05, w: 0.26, xOff: 0.14 },
+  { chars: 'zxcvbnm',     z:  0.30, w: 0.26, xOff: 0.35 }
+];
+
+const keyBaseMat = new THREE.MeshStandardMaterial({ color: 0x2a2a3e, roughness: 0.35, metalness: 0.3 });
+const keyGlowMat = new THREE.MeshStandardMaterial({ color: 0xa855f7, emissive: 0xa855f7, emissiveIntensity: 1.5, roughness: 0.3, metalness: 0.5 });
+
+// Base plate
+const platGeo = new THREE.BoxGeometry(3.4, 0.06, 2.2);
+const plate = new THREE.Mesh(platGeo, new THREE.MeshStandardMaterial({ color: 0x18182a, roughness: 0.2, metalness: 0.5 }));
+plate.position.y = 0.03;
+plate.receiveShadow = true;
+kbGroup.add(plate);
+
+// Create text labels using canvas textures
+function makeKeyLabel(char) {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#2a2a3e';
+  ctx.fillRect(0, 0, 64, 64);
+  ctx.fillStyle = '#8888aa';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(char.toUpperCase(), 32, 32);
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.LinearFilter;
+  return tex;
+}
+
+ROWS.forEach(row => {
+  const totalW = row.chars.length * (row.w + 0.06);
+  const startX = -totalW / 2 + row.xOff;
+
+  for (let i = 0; i < row.chars.length; i++) {
+    const ch = row.chars[i];
+    const keyGeo = new THREE.BoxGeometry(row.w, 0.1, 0.28);
+
+    // Top face gets the label texture
+    const materials = [
+      keyBaseMat.clone(), keyBaseMat.clone(), // left, right
+      new THREE.MeshStandardMaterial({ map: makeKeyLabel(ch), roughness: 0.4 }), // top
+      keyBaseMat.clone(), // bottom
+      keyBaseMat.clone(), keyBaseMat.clone()  // front, back
+    ];
+
+    const key = new THREE.Mesh(keyGeo, materials);
+    key.position.set(startX + i * (row.w + 0.06), 0.11, row.z);
+    key.castShadow = true;
+    kbGroup.add(key);
+    keyMeshes[ch] = key;
+  }
+});
+
+// Space bar
+const spaceMats = [
+  keyBaseMat.clone(), keyBaseMat.clone(),
+  new THREE.MeshStandardMaterial({ map: makeKeyLabel('___'), roughness: 0.4 }),
+  keyBaseMat.clone(), keyBaseMat.clone(), keyBaseMat.clone()
+];
+const spaceKey = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.1, 0.28), spaceMats);
+spaceKey.position.set(0.2, 0.11, 0.65);
+kbGroup.add(spaceKey);
+keyMeshes[' '] = spaceKey;
+keyMeshes['space'] = spaceKey;
+
+// Enter key
+const enterMats = [
+  keyBaseMat.clone(), keyBaseMat.clone(),
+  new THREE.MeshStandardMaterial({ map: makeKeyLabel('RET'), roughness: 0.4 }),
+  keyBaseMat.clone(), keyBaseMat.clone(), keyBaseMat.clone()
+];
+const enterKey = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.1, 0.28), enterMats);
+enterKey.position.set(1.6, 0.11, -0.05);
+kbGroup.add(enterKey);
+keyMeshes['enter'] = enterKey;
+keyMeshes['\n'] = enterKey;
+
+kbGroup.position.set(-3.0, 0, 2.0);
+kbGroup.rotation.y = 0.2;
+kbGroup.rotation.x = -0.05;
+scene.add(kbGroup);
+
+// Flash a key on the 3D keyboard
+const activeKeys = [];
+
+function flashKey(char) {
+  const ch = char.toLowerCase();
+  const mesh = keyMeshes[ch];
+  if (!mesh) return;
+
+  // Skip if this key is already flashing (prevent stacking)
+  if (activeKeys.some(ak => ak.mesh === mesh)) return;
+
+  // Store original materials and swap top face to glow (reuse, don't clone)
+  const origMats = Array.isArray(mesh.material) ? mesh.material.slice() : [mesh.material];
+
+  if (Array.isArray(mesh.material)) {
+    const mats = mesh.material.slice();
+    mats[2] = keyGlowMat;
+    mesh.material = mats;
+  } else {
+    mesh.material = keyGlowMat;
+  }
+  mesh.position.y = 0.07;
+
+  activeKeys.push({ mesh, origMats, origY: 0.11, life: 1.0 });
+}
+
 // Trail
 const trails = [];
 const tGeo = new THREE.SphereGeometry(0.03, 6, 6);
@@ -227,16 +348,67 @@ let shotIdx = -1;
 ipcRenderer.on('init', (_, d) => { screenW = d.screenW; screenH = d.screenH; });
 ipcRenderer.on('mouse-pos-update', (_, { x, y }) => { mPos.x = (x / screenW - 0.5) * 12; mPos.z = (y / screenH - 0.5) * 8; moving = true; });
 ipcRenderer.on('mouse-clicked', () => { clickFlash = 1; });
+ipcRenderer.on('key-pressed', (_, { char }) => { flashKey(char); });
 
 ipcRenderer.on('ai-step', (_, info) => {
-  const el = document.getElementById('ai-status');
-  const colors = { thinking: '#a855f7', acting: '#f59e0b', done: '#10b981', failed: '#ef4444', error: '#ef4444' };
-  el.style.color = colors[info.status] || '#888';
-  if (info.status === 'thinking') el.textContent = `Step ${info.step}/${info.maxSteps}: Thinking...`;
-  else if (info.status === 'acting') { const a = info.action; el.textContent = `Step ${info.step}: ${a.action}${a.x ? ` (${a.x},${a.y})` : ''}`; }
-  else if (info.status === 'done') el.textContent = `Done: ${info.reason}`;
-  else if (info.status === 'failed') el.textContent = `Failed: ${info.reason}`;
-  else if (info.status === 'error') el.textContent = `Error: ${info.error}`;
+  const chat = document.getElementById('ai-chat');
+
+  // Clear "no task" message on first step
+  if (info.step === 1 && info.status === 'thinking') {
+    chat.innerHTML = '';
+  }
+
+  // Build action description
+  let body = '';
+  if (info.status === 'thinking') body = 'Analyzing screenshot...';
+  else if (info.status === 'acting') {
+    const a = info.action;
+    if (a.action === 'batch') {
+      body = a.actions.map((act, i) => {
+        if (act.action === 'focus') return `${i+1}. Focus → ${act.app}`;
+        if (act.action === 'click') return `${i+1}. Click → (${act.x}, ${act.y})`;
+        if (act.action === 'move') return `${i+1}. Move → (${act.x}, ${act.y})`;
+        if (act.action === 'type') return `${i+1}. Type → "${act.text}"`;
+        if (act.action === 'key') return `${i+1}. Key → ${act.key}`;
+        if (act.action === 'shortcut') return `${i+1}. ${(act.modifiers||[]).join('+')}+${act.key}`;
+        if (act.action === 'scroll') return `${i+1}. Scroll ${act.direction}`;
+        return `${i+1}. ${act.action}`;
+      }).join('<br>');
+    } else {
+      if (a.action === 'focus') body = `Focus → ${a.app}`;
+      else if (a.action === 'click') body = `Click → (${a.x}, ${a.y})`;
+      else if (a.action === 'move') body = `Move → (${a.x}, ${a.y})`;
+      else if (a.action === 'type') body = `Type → "${a.text}"`;
+      else if (a.action === 'key') body = `Key → ${a.key}`;
+      else if (a.action === 'shortcut') body = `${(a.modifiers||[]).join('+')}+${a.key}`;
+      else if (a.action === 'scroll') body = `Scroll ${a.direction}`;
+      else body = JSON.stringify(a);
+    }
+  }
+  else if (info.status === 'done') body = info.reason;
+  else if (info.status === 'failed') body = info.reason;
+  else if (info.status === 'error') body = info.error;
+
+  // Find or create step element
+  let stepEl = document.getElementById(`ai-step-${info.step}`);
+  if (!stepEl) {
+    stepEl = document.createElement('div');
+    stepEl.id = `ai-step-${info.step}`;
+    stepEl.className = 'chat-step';
+    chat.appendChild(stepEl);
+  }
+
+  stepEl.innerHTML = `
+    <div class="chat-step-header">
+      <span class="chat-step-num">Step ${info.step}</span>
+      <span class="chat-step-status ${info.status}">${info.status}</span>
+    </div>
+    <div class="chat-step-body">${body}</div>
+    ${info.screenshot ? `<img class="chat-step-img" src="data:image/png;base64,${info.screenshot}">` : ''}
+  `;
+
+  // Auto-scroll to bottom
+  chat.scrollTop = chat.scrollHeight;
 });
 
 // ── Keyboard ────────────────────────���─────────────────────
@@ -270,82 +442,324 @@ function renderShot() {
   document.getElementById('btn-next').disabled = shotIdx >= shots.length - 1;
 }
 
-document.getElementById('btn-screenshot').addEventListener('click', async () => {
-  const btn = document.getElementById('btn-screenshot');
+async function doScreenshot(mode, btn, label) {
   btn.disabled = true; btn.textContent = '...';
-  const r = await api.takeScreenshot();
+  const r = await api.takeScreenshot(mode);
   if (r.smallBase64) {
     shots.push(r);
     shotIdx = shots.length - 1;
     renderShot();
     updateMonitorScreen(r.smallBase64);
   }
-  btn.disabled = false; btn.textContent = 'Capture';
+  btn.disabled = false; btn.textContent = label;
+}
+
+document.getElementById('btn-screenshot').addEventListener('click', () => {
+  doScreenshot('screen', document.getElementById('btn-screenshot'), 'Full Screen');
+});
+
+document.getElementById('btn-screenshot-win').addEventListener('click', () => {
+  doScreenshot('window', document.getElementById('btn-screenshot-win'), 'Window');
 });
 
 document.getElementById('btn-prev').addEventListener('click', () => { if (shotIdx > 0) { shotIdx--; renderShot(); updateMonitorScreen(shots[shotIdx].smallBase64); } });
 document.getElementById('btn-next').addEventListener('click', () => { if (shotIdx < shots.length - 1) { shotIdx++; renderShot(); updateMonitorScreen(shots[shotIdx].smallBase64); } });
 document.getElementById('btn-del').addEventListener('click', () => {
-  if (!shots.length) return;
+  if (!shots.length || shotIdx < 0 || shotIdx >= shots.length) return;
   shots.splice(shotIdx, 1);
-  if (shotIdx >= shots.length) shotIdx = shots.length - 1;
-  if (shots.length) { renderShot(); updateMonitorScreen(shots[shotIdx].smallBase64); }
-  else { shotIdx = -1; renderShot(); screenCtx.fillStyle = '#0a0a12'; screenCtx.fillRect(0, 0, 800, 450); screenCtx.fillStyle = '#333'; screenCtx.font = '24px sans-serif'; screenCtx.textAlign = 'center'; screenCtx.fillText('No screenshot yet', 400, 230); screenTex.needsUpdate = true; }
+  shotIdx = Math.min(shotIdx, shots.length - 1);
+  if (shots.length && shotIdx >= 0) {
+    renderShot();
+    updateMonitorScreen(shots[shotIdx].smallBase64);
+  } else {
+    shotIdx = -1;
+    renderShot();
+    screenCtx.fillStyle = '#0a0a12';
+    screenCtx.fillRect(0, 0, 1600, 1000);
+    screenCtx.fillStyle = '#333';
+    screenCtx.font = '36px sans-serif';
+    screenCtx.textAlign = 'center';
+    screenCtx.fillText('No screenshot yet', 800, 510);
+    screenTex.needsUpdate = true;
+  }
 });
 
-// ── Panel Buttons ─────────────────────────────────────────
+// ── Tab switching ─────────────────────────────────────────
 
-document.getElementById('btn-move').addEventListener('click', async () => {
-  const tx = parseInt(document.getElementById('target-x').value);
-  const ty = parseInt(document.getElementById('target-y').value);
-  const st = document.getElementById('move-status');
-  const btn = document.getElementById('btn-move');
-  btn.disabled = true; st.textContent = 'Planning...'; st.style.color = '#888';
-  const pv = await api.previewPath(tx, ty);
-  showPath(pv.points, screenW, screenH);
-  st.textContent = `${pv.points.length} steps`;
-  await new Promise(r => setTimeout(r, 400));
-  st.textContent = 'Moving...'; st.style.color = '#f59e0b';
-  const res = await api.executeMove(tx, ty);
-  st.textContent = res.completed ? `Arrived (${tx},${ty})` : 'Cancelled';
-  st.style.color = res.completed ? '#10b981' : '#ef4444';
-  clearPath(); btn.disabled = false;
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+  });
 });
 
-document.getElementById('btn-click').addEventListener('click', async () => {
-  const tx = parseInt(document.getElementById('click-x').value);
-  const ty = parseInt(document.getElementById('click-y').value);
-  const btn = document.getElementById('btn-click');
+// ── App focus ─────────────────────────────────────────────
+
+let selectedApp = null;
+
+async function loadApps() {
+  const result = await ipcRenderer.invoke('list-apps');
+  const container = document.getElementById('apps-list');
+  container.innerHTML = '';
+
+  if (!result.success || !result.apps.length) {
+    container.innerHTML = '<span style="color:#444;font-size:0.72rem;">No apps found</span>';
+    return;
+  }
+
+  result.apps.forEach(app => {
+    const btn = document.createElement('button');
+    btn.textContent = app;
+    btn.className = 'btn btn-ghost';
+    btn.style.cssText = 'width:auto;padding:4px 10px;font-size:0.68rem;flex:none;';
+    if (app === selectedApp) {
+      btn.style.borderColor = '#a855f7';
+      btn.style.color = '#a855f7';
+    }
+    btn.addEventListener('click', () => {
+      selectedApp = (selectedApp === app) ? null : app;
+      loadApps(); // re-render to update highlight
+    });
+    container.appendChild(btn);
+  });
+}
+
+/** Focus the selected app before an action. Returns true if focused. */
+async function focusSelected() {
+  if (!selectedApp) return true; // no app selected, proceed anyway
+  const res = await ipcRenderer.invoke('focus-app', { appName: selectedApp });
+  return res.success;
+}
+
+loadApps();
+document.querySelector('[data-tab="action"]').addEventListener('click', loadApps);
+
+// ── Action tab — Queue system ─────────────────────────────
+
+const queue = [];
+
+function getTarget() {
+  return {
+    x: parseInt(document.getElementById('target-x').value),
+    y: parseInt(document.getElementById('target-y').value)
+  };
+}
+
+function getTypeText() {
+  return document.getElementById('type-text').value || '';
+}
+
+function describeStep(step) {
+  switch (step.action) {
+    case 'focus': return `Focus → ${step.app}`;
+    case 'move': return `Move → (${step.x}, ${step.y})`;
+    case 'click': return `Click → (${step.x}, ${step.y})`;
+    case 'click_type': return `Click (${step.x}, ${step.y}) → Type "${step.text}"`;
+    case 'type': return `Type → "${step.text}"`;
+    case 'key': return `Key → ${step.key}`;
+    case 'screenshot': return `Screenshot (${step.mode})`;
+    default: return step.action;
+  }
+}
+
+function renderQueue() {
+  const list = document.getElementById('queue-list');
+  if (!queue.length) {
+    list.innerHTML = '<span class="empty-msg">No steps added</span>';
+    return;
+  }
+  list.innerHTML = queue.map((step, i) => `
+    <div class="queue-item" id="queue-item-${i}">
+      <span class="queue-num">${i + 1}</span>
+      <span class="queue-desc">${describeStep(step)}</span>
+      <button class="queue-del" data-idx="${i}">×</button>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.queue-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      queue.splice(parseInt(btn.dataset.idx), 1);
+      renderQueue();
+    });
+  });
+}
+
+// Add step buttons
+document.getElementById('btn-add-move').addEventListener('click', () => {
+  const { x, y } = getTarget();
+  queue.push({ action: 'move', x, y });
+  renderQueue();
+});
+
+document.getElementById('btn-add-click').addEventListener('click', () => {
+  const { x, y } = getTarget();
+  queue.push({ action: 'click', x, y });
+  renderQueue();
+});
+
+document.getElementById('btn-add-type').addEventListener('click', () => {
+  const text = getTypeText();
+  if (!text) return;
+  queue.push({ action: 'type', text });
+  renderQueue();
+});
+
+document.getElementById('btn-add-click-type').addEventListener('click', () => {
+  const { x, y } = getTarget();
+  const text = getTypeText();
+  if (!text) return;
+  queue.push({ action: 'click_type', x, y, text });
+  renderQueue();
+});
+
+document.getElementById('btn-add-enter').addEventListener('click', () => {
+  queue.push({ action: 'key', key: 'enter' });
+  renderQueue();
+});
+
+document.getElementById('btn-add-tab').addEventListener('click', () => {
+  queue.push({ action: 'key', key: 'tab' });
+  renderQueue();
+});
+
+document.getElementById('btn-add-esc').addEventListener('click', () => {
+  queue.push({ action: 'key', key: 'escape' });
+  renderQueue();
+});
+
+document.getElementById('btn-add-shot-screen').addEventListener('click', () => {
+  queue.push({ action: 'screenshot', mode: 'screen' });
+  renderQueue();
+});
+
+document.getElementById('btn-add-shot-window').addEventListener('click', () => {
+  queue.push({ action: 'screenshot', mode: 'window' });
+  renderQueue();
+});
+
+// Clear queue
+document.getElementById('btn-clear-queue').addEventListener('click', () => {
+  queue.length = 0;
+  renderQueue();
+  document.getElementById('queue-status').textContent = '';
+});
+
+// Execute all steps in order
+document.getElementById('btn-execute').addEventListener('click', async () => {
+  if (!queue.length) return;
+  const btn = document.getElementById('btn-execute');
+  const st = document.getElementById('queue-status');
   btn.disabled = true;
-  const pv = await api.previewPath(tx, ty);
-  showPath(pv.points, screenW, screenH);
-  await new Promise(r => setTimeout(r, 300));
-  const res = await api.executeClick(tx, ty, 'left');
-  if (res.clicked) clickFlash = 1;
-  clearPath(); btn.disabled = false;
+
+  // Focus selected app first
+  await focusSelected();
+
+  for (let i = 0; i < queue.length; i++) {
+    const step = queue[i];
+    const el = document.getElementById(`queue-item-${i}`);
+    if (el) el.className = 'queue-item running';
+    st.textContent = `Running step ${i + 1}/${queue.length}...`;
+    st.style.color = '#f59e0b';
+
+    switch (step.action) {
+      case 'move': {
+        const pv = await api.previewPath(step.x, step.y);
+        showPath(pv.points, screenW, screenH);
+        await api.executeMove(step.x, step.y);
+        clearPath();
+        break;
+      }
+      case 'click': {
+        const pv = await api.previewPath(step.x, step.y);
+        showPath(pv.points, screenW, screenH);
+        const res = await api.executeClick(step.x, step.y, 'left');
+        if (res.clicked) clickFlash = 1;
+        clearPath();
+        break;
+      }
+      case 'click_type': {
+        const pv = await api.previewPath(step.x, step.y);
+        showPath(pv.points, screenW, screenH);
+        await api.executeMove(step.x, step.y);
+        clearPath();
+        // Double click to ensure field is active
+        await api.clickCursor('left');
+        await new Promise(r => setTimeout(r, 100));
+        await api.clickCursor('left');
+        clickFlash = 1;
+        // Wait for field to become editable
+        await new Promise(r => setTimeout(r, 400));
+        await api.executeType(step.text);
+        break;
+      }
+      case 'type':
+        await api.executeType(step.text);
+        break;
+      case 'key':
+        api.executeKey(step.key);
+        break;
+      case 'screenshot': {
+        const shot = await api.takeScreenshot(step.mode);
+        if (shot.smallBase64) {
+          shots.push(shot);
+          shotIdx = shots.length - 1;
+          renderShot();
+          updateMonitorScreen(shot.smallBase64);
+        }
+        break;
+      }
+    }
+
+    if (el) el.className = 'queue-item done';
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  st.textContent = `Done — ${queue.length} steps executed`;
+  st.style.color = '#10b981';
+  btn.disabled = false;
 });
+
+// ── AI tab ────────────────────────────────────────────────
 
 document.getElementById('btn-ai-run').addEventListener('click', async () => {
   const task = document.getElementById('ai-task').value.trim();
   if (!task) return;
   const btn = document.getElementById('btn-ai-run');
-  const st = document.getElementById('ai-status');
+  const chat = document.getElementById('ai-chat');
+
   btn.disabled = true; btn.textContent = '...';
-  st.textContent = 'Starting...'; st.style.color = '#a855f7';
-  mode = 'ai'; document.getElementById('mode-indicator').textContent = 'AI'; document.getElementById('mode-indicator').className = 'ai';
+  chat.innerHTML = '<span class="empty-msg">Starting...</span>';
+  mode = 'ai';
+  document.getElementById('mode-indicator').textContent = 'AI';
+  document.getElementById('mode-indicator').className = 'ai';
+
   const res = await ipcRenderer.invoke('ai-run-task', { task, maxSteps: 15 });
-  st.textContent = res.success ? `Done (${res.steps}): ${res.reason}` : `Stopped (${res.steps}): ${res.reason}`;
-  st.style.color = res.success ? '#10b981' : '#ef4444';
+
+  // Add final result to chat
+  const final = document.createElement('div');
+  final.className = 'chat-step';
+  final.innerHTML = `
+    <div class="chat-step-header">
+      <span class="chat-step-num">Result</span>
+      <span class="chat-step-status ${res.success ? 'done' : 'failed'}">${res.success ? 'Done' : 'Failed'}</span>
+    </div>
+    <div class="chat-step-body">${res.reason} (${res.steps} steps)</div>
+  `;
+  chat.appendChild(final);
+  chat.scrollTop = chat.scrollHeight;
+
   btn.disabled = false; btn.textContent = 'Run';
-  mode = 'keyboard'; document.getElementById('mode-indicator').textContent = 'KEYBOARD'; document.getElementById('mode-indicator').className = 'keyboard';
+  mode = 'keyboard';
+  document.getElementById('mode-indicator').textContent = 'KEYBOARD';
+  document.getElementById('mode-indicator').className = 'keyboard';
 });
 
-document.getElementById('btn-stop').addEventListener('click', async () => {
+document.getElementById('btn-stop-ai').addEventListener('click', async () => {
   await ipcRenderer.invoke('ai-stop');
   await api.stopMovement();
   clearPath();
-  document.getElementById('move-status').textContent = 'Stopped';
-  document.getElementById('ai-status').textContent = 'Stopped';
 });
 
 // ── Animation Loop ────────────────────────────────────────
@@ -388,6 +802,19 @@ function animate() {
   }
   trails.forEach(t => { if (t.life > 0) { t.life -= 0.03; t.mesh.material.opacity = t.life * 0.5; t.mesh.scale.setScalar(t.life); if (t.life <= 0) t.mesh.visible = false; } });
 
+  // Keyboard key flash decay
+  for (let i = activeKeys.length - 1; i >= 0; i--) {
+    const ak = activeKeys[i];
+    ak.life -= 0.06;
+    if (ak.life <= 0) {
+      ak.mesh.material = ak.origMats;
+      ak.mesh.position.y = ak.origY;
+      activeKeys.splice(i, 1);
+    } else {
+      ak.mesh.position.y = 0.07 + (1 - ak.life) * 0.04;
+    }
+  }
+
   const pulse = Math.sin(Date.now() * 0.003) * 0.2 + 0.8;
   if (clickFlash <= 0) { ledL.material.emissiveIntensity = ledR.material.emissiveIntensity = moving ? 1.2 : pulse; }
 
@@ -416,11 +843,12 @@ function updateCamera() {
 
 updateCamera();
 
-// Hold Shift + scroll to zoom, Shift + drag to rotate
+// Ctrl + scroll to zoom, Shift + drag to rotate
 canvas.addEventListener('wheel', (e) => {
-  if (!e.shiftKey) return;
+  if (!e.ctrlKey && !e.metaKey) return;
   e.preventDefault();
-  camDist = Math.max(4, Math.min(20, camDist + e.deltaY * 0.01));
+  const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+  camDist = Math.max(4, Math.min(20, camDist + delta * 0.01));
   updateCamera();
 }, { passive: false });
 

@@ -12,7 +12,7 @@
 
 'use strict';
 
-const robot = require('robotjs');
+const input = require('./input');
 const { generatePath } = require('./path-engine');
 
 let taskSeq    = 0;   // monotonic — bump to cancel current task
@@ -34,17 +34,17 @@ async function executeMove(targetX, targetY, opts = {}) {
   const id = ++taskSeq;
   executing = true;
 
-  const start  = robot.getMousePos();
+  const start  = input.getMousePos();
   const points = generatePath(start.x, start.y, targetX, targetY, opts.pathOptions || {});
 
   for (let i = 0; i < points.length; i++) {
     if (taskSeq !== id) {
       executing = false;
-      return { completed: false, cancelled: true, stopped: false, position: robot.getMousePos() };
+      return { completed: false, cancelled: true, stopped: false, position: input.getMousePos() };
     }
 
     const pt = points[i];
-    robot.moveMouse(pt.x, pt.y);
+    input.moveMouse(pt.x, pt.y);
 
     if (opts.onStep) opts.onStep(pt.x, pt.y, i / points.length);
 
@@ -82,7 +82,7 @@ async function executeClick(x, y, button = 'left', opts = {}) {
   const result = await executeMove(x, y, opts);
   if (result.completed) {
     await new Promise(r => setTimeout(r, 30 + Math.random() * 50));
-    robot.mouseClick(button);
+    input.clickMouse(x, y, button === 'right' ? 1 : 0);
     return { ...result, clicked: true };
   }
   return { ...result, clicked: false };
@@ -90,26 +90,79 @@ async function executeClick(x, y, button = 'left', opts = {}) {
 
 /** Scroll by amount (positive = down). */
 function executeScroll(amount) {
-  robot.scrollMouse(0, amount);
+  input.scrollMouse(amount);
   return { scrolled: true, amount };
 }
 
-/** Teleport cursor (no path, instant). */
-function moveInstant(x, y) {
-  robot.moveMouse(x, y);
-  return { x, y };
+/**
+ * Type text key-by-key with human-like delays.
+ * Each character is a separate keypress — not a paste.
+ *
+ * @param {string} text - Text to type
+ * @param {object} [opts]
+ * @param {function} [opts.onKey] - (char, index, total) → update 3D keyboard
+ * @returns {Promise<{typed: boolean, text: string, chars: number}>}
+ */
+async function executeType(text, opts = {}) {
+  const id = ++taskSeq;
+  executing = true;
+
+  for (let i = 0; i < text.length; i++) {
+    if (taskSeq !== id) {
+      executing = false;
+      return { typed: false, cancelled: true, text: text.slice(0, i), chars: i };
+    }
+
+    const char = text[i];
+    if (char === '\n') {
+      input.keyTap('enter');
+    } else if (char === '\t') {
+      input.keyTap('tab');
+    } else {
+      // typeChar handles all characters via CoreGraphics Unicode
+      input.typeChar(char);
+    }
+
+    if (opts.onKey) opts.onKey(char, i, text.length);
+
+    // Human-like delay: 25-80ms between keys, occasional brief pause
+    const pause = Math.random() < 0.08
+      ? 100 + Math.random() * 80    // occasional thinking pause
+      : 25 + Math.random() * 55;    // fast but natural typing
+    await new Promise(r => setTimeout(r, pause));
+  }
+
+  executing = false;
+  return { typed: true, cancelled: false, text, chars: text.length };
+}
+
+/**
+ * Press a single key or key combination.
+ *
+ * @param {string} key - Key name ('enter', 'tab', 'escape', 'backspace', etc.)
+ * @param {string[]} [modifiers] - Modifier keys (['command'], ['control', 'shift'], etc.)
+ * @param {object} [opts]
+ * @param {function} [opts.onKey] - (key) → update 3D keyboard
+ * @returns {{pressed: boolean, key: string}}
+ */
+function executeKeyPress(key, modifiers = [], opts = {}) {
+  input.keyTap(key, modifiers);
+
+  if (opts.onKey) opts.onKey(key);
+
+  return { pressed: true, key, modifiers };
 }
 
 /** Cancel any in-progress movement. */
 function stopMovement() {
   taskSeq++;
   executing = false;
-  return { stopped: true, position: robot.getMousePos() };
+  return { stopped: true, position: input.getMousePos() };
 }
 
 /** Current executor state. */
 function getStatus() {
-  return { executing, cursor: robot.getMousePos() };
+  return { executing, cursor: input.getMousePos() };
 }
 
-module.exports = { executeMove, executeClick, executeScroll, moveInstant, stopMovement, getStatus };
+module.exports = { executeMove, executeClick, executeScroll, executeType, executeKeyPress, stopMovement, getStatus };

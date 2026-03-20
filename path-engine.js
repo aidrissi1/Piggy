@@ -72,14 +72,9 @@ function generatePath(startX, startY, endX, endY, opts = {}) {
   return points;
 }
 
-/** Euclidean distance. */
-function distance(x1, y1, x2, y2) {
-  return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
-}
-
 /** Sum of all waypoint delays in ms. */
 function estimateDuration(path) {
   return path.reduce((sum, p) => sum + p.delay, 0);
 }
 
-module.exports = { generatePath, distance, estimateDuration };
+module.exports = { generatePath, estimateDuration };

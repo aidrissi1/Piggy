@@ -6,153 +6,195 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: #0a0a0f;
-      color: #e0e0e0;
+      background: #0a0a0f; color: #e0e0e0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      overflow: hidden;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
+      overflow: hidden; height: 100vh; display: flex; flex-direction: column;
     }
 
     /* ── Header ── */
     #header {
-      padding: 10px 20px;
-      background: rgba(0,0,0,0.5);
+      padding: 8px 20px; background: rgba(0,0,0,0.5);
       border-bottom: 1px solid rgba(255,255,255,0.1);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      z-index: 10;
+      display: flex; justify-content: space-between; align-items: center;
     }
     #header h1 { font-size: 1.1rem; font-weight: 700; }
     #header h1 .brand { color: #a855f7; }
-    #controls-info { font-size: 0.72rem; color: #555; display: flex; gap: 12px; }
-    #controls-info kbd {
-      background: rgba(255,255,255,0.08); padding: 2px 6px;
-      border-radius: 4px; font-size: 0.68rem;
+    #shortcuts { font-size: 0.68rem; color: #444; display: flex; gap: 10px; }
+    #shortcuts kbd {
+      background: rgba(255,255,255,0.06); padding: 2px 5px;
+      border-radius: 3px; font-size: 0.65rem;
     }
 
     /* ── Layout ── */
     #main-layout { flex: 1; display: flex; overflow: hidden; }
-
     #scene-container { flex: 1; position: relative; }
     canvas { display: block; }
 
     /* ── Panel ── */
     #panel {
-      width: 290px;
-      background: rgba(0,0,0,0.4);
-      border-left: 1px solid rgba(255,255,255,0.1);
-      padding: 14px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
+      width: 280px; background: rgba(0,0,0,0.45);
+      border-left: 1px solid rgba(255,255,255,0.08);
+      display: flex; flex-direction: column;
     }
 
-    .section {
+    /* Tab bar */
+    #tabs {
+      display: flex; border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .tab {
+      flex: 1; padding: 10px 0; text-align: center;
+      font-size: 0.72rem; font-weight: 600; color: #555;
+      cursor: pointer; border: none; background: none;
+      border-bottom: 2px solid transparent; transition: all 0.15s;
+    }
+    .tab:hover { color: #999; }
+    .tab.active { color: #a855f7; border-bottom-color: #a855f7; }
+
+    /* Tab content */
+    .tab-content { display: none; padding: 14px; flex: 1; overflow-y: auto; }
+    .tab-content.active { display: flex; flex-direction: column; gap: 12px; }
+
+    /* Shared styles */
+    .card {
       background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 8px;
-      padding: 12px;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 8px; padding: 12px;
     }
-    .section h3 {
-      font-size: 0.75rem; color: #a855f7; margin-bottom: 8px;
-      text-transform: uppercase; letter-spacing: 1px;
+    .card-title {
+      font-size: 0.7rem; color: #666; text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 8px;
     }
 
-    .row { display: flex; gap: 8px; margin-bottom: 6px; }
-    .row label { font-size: 0.75rem; color: #666; width: 26px; line-height: 28px; }
-    .row input[type="number"] {
-      flex: 1; padding: 5px 8px; border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.12);
+    .field { display: flex; gap: 8px; margin-bottom: 6px; }
+    .field label { font-size: 0.75rem; color: #555; width: 24px; line-height: 30px; }
+    .field input {
+      flex: 1; padding: 6px 8px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.1);
       background: rgba(255,255,255,0.04); color: #fff; font-size: 0.8rem;
     }
-    .row input[type="text"], #ai-task {
+    .field input:focus { border-color: #a855f7; outline: none; }
+
+    .text-input {
       width: 100%; padding: 7px 10px; border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.1);
       background: rgba(255,255,255,0.04); color: #fff; font-size: 0.78rem;
       margin-bottom: 6px;
     }
+    .text-input:focus { border-color: #a855f7; outline: none; }
 
     .btn {
       width: 100%; padding: 9px; border-radius: 8px; border: none;
       font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.15s;
     }
     .btn:hover { transform: translateY(-1px); }
-    .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-    .btn-blue   { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; }
-    .btn-green  { background: linear-gradient(135deg, #10b981, #059669); color: #fff; }
-    .btn-red    { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; }
-    .btn-purple { background: linear-gradient(135deg, #a855f7, #7c3aed); color: #fff; }
-
-    .status { font-size: 0.72rem; color: #888; margin-top: 6px; min-height: 16px; }
-
-    /* ── Screen Viewer ── */
-    #screen-viewer {
-      position: relative;
+    .btn:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
+    .btn-primary { background: linear-gradient(135deg, #a855f7, #7c3aed); color: #fff; }
+    .btn-green   { background: linear-gradient(135deg, #10b981, #059669); color: #fff; }
+    .btn-red     { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; }
+    .btn-ghost {
+      background: rgba(255,255,255,0.05); color: #888;
       border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 6px;
-      overflow: hidden;
-      background: #000;
     }
-    #screen-viewer img {
-      width: 100%; display: block; border-radius: 5px;
+    .btn-ghost:hover { background: rgba(255,255,255,0.08); color: #ccc; }
+
+    .btn-row { display: flex; gap: 6px; }
+    .btn-row .btn { flex: 1; }
+
+    .status { font-size: 0.7rem; color: #666; margin-top: 6px; min-height: 14px; }
+
+    /* Screen viewer */
+    #screen-viewer {
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
+      overflow: hidden; background: #000;
     }
+    #screen-viewer img { width: 100%; display: block; }
     #screen-nav {
-      display: flex; justify-content: space-between; align-items: center;
-      margin-top: 6px;
+      display: flex; justify-content: space-between; align-items: center; margin-top: 6px;
     }
     #screen-nav button {
-      padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.15);
-      background: rgba(255,255,255,0.05); color: #aaa; font-size: 0.7rem; cursor: pointer;
+      padding: 3px 8px; border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04); color: #777; font-size: 0.68rem; cursor: pointer;
     }
-    #screen-nav button:hover { background: rgba(255,255,255,0.1); color: #fff; }
-    #screen-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
-    #screen-counter { font-size: 0.68rem; color: #555; }
-    #screen-time { font-size: 0.65rem; color: #444; text-align: center; margin-top: 3px; }
-    .no-screenshot { text-align: center; padding: 20px 0; color: #444; font-size: 0.75rem; }
+    #screen-nav button:hover { color: #fff; background: rgba(255,255,255,0.08); }
+    #screen-nav button:disabled { opacity: 0.25; }
+    #screen-counter { font-size: 0.65rem; color: #444; }
+    #screen-time { font-size: 0.62rem; color: #333; text-align: center; margin-top: 2px; }
+    .empty-msg { text-align: center; padding: 16px 0; color: #333; font-size: 0.72rem; }
+
+    /* Chat messages */
+    .chat-step {
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 6px; padding: 8px; font-size: 0.7rem;
+    }
+    .chat-step-header {
+      display: flex; justify-content: space-between; margin-bottom: 4px;
+    }
+    .chat-step-num { color: #a855f7; font-weight: 600; }
+    .chat-step-status { font-weight: 500; }
+    .chat-step-status.thinking { color: #a855f7; }
+    .chat-step-status.acting { color: #f59e0b; }
+    .chat-step-status.done { color: #10b981; }
+    .chat-step-status.failed { color: #ef4444; }
+    .chat-step-status.error { color: #ef4444; }
+    .chat-step-body { color: #888; word-break: break-word; }
+    .chat-step-img { width: 100%; border-radius: 4px; margin-top: 4px; opacity: 0.7; }
+
+    /* Queue steps */
+    .queue-item {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 5px; padding: 5px 8px; font-size: 0.68rem; color: #888;
+    }
+    .queue-item.running { border-color: #a855f7; color: #a855f7; }
+    .queue-item.done { border-color: #10b981; color: #10b981; opacity: 0.6; }
+    .queue-num { color: #555; font-weight: 600; width: 16px; }
+    .queue-desc { flex: 1; }
+    .queue-del {
+      background: none; border: none; color: #555; cursor: pointer;
+      font-size: 0.8rem; padding: 0 2px;
+    }
+    .queue-del:hover { color: #ef4444; }
 
     /* ── HUD ── */
     #hud {
-      position: absolute; bottom: 16px; left: 16px;
-      background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 8px; padding: 10px 14px; font-size: 0.75rem;
+      position: absolute; bottom: 14px; left: 14px;
+      background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px; padding: 8px 12px; font-size: 0.72rem;
     }
-    #hud .r { display: flex; justify-content: space-between; gap: 18px; margin-bottom: 2px; }
-    #hud .l { color: #666; }
+    #hud .r { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 1px; }
+    #hud .l { color: #555; }
     #hud .v { color: #a855f7; font-weight: 600; }
 
     #mode-indicator {
-      position: absolute; top: 16px; right: 16px;
-      padding: 5px 12px; border-radius: 8px; font-size: 0.78rem; font-weight: 600;
+      position: absolute; top: 14px; right: 14px;
+      padding: 4px 10px; border-radius: 6px; font-size: 0.72rem; font-weight: 600;
     }
     #mode-indicator.keyboard {
-      background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: #3b82f6;
+      background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25); color: #3b82f6;
     }
     #mode-indicator.ai {
-      background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.3); color: #a855f7;
+      background: rgba(168,85,247,0.12); border: 1px solid rgba(168,85,247,0.25); color: #a855f7;
     }
 
     #speed-bar {
-      position: absolute; bottom: 16px; right: 16px;
-      background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 8px; padding: 8px 12px; font-size: 0.72rem;
+      position: absolute; bottom: 14px; right: 14px;
+      background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px; padding: 6px 10px; font-size: 0.68rem;
     }
-    #speed-bar .l { color: #666; margin-bottom: 3px; }
-    #speed-slider { width: 90px; accent-color: #a855f7; }
+    #speed-bar .l { color: #555; margin-bottom: 2px; }
+    #speed-slider { width: 80px; accent-color: #a855f7; }
   </style>
 </head>
 <body>
   <div id="header">
     <h1><span class="brand">Piggy</span></h1>
-    <div id="controls-info">
+    <div id="shortcuts">
       <span><kbd>WASD</kbd> Move</span>
       <span><kbd>Space</kbd> Click</span>
       <span><kbd>Q/E</kbd> Scroll</span>
-      <span><kbd>Shift+Scroll</kbd> Zoom</span>
-      <span><kbd>Shift+Drag</kbd> Rotate</span>
+      <span><kbd>Ctrl+Scroll</kbd> Zoom</span>
+      <span><kbd>Shift+Drag</kbd> Orbit</span>
     </div>
   </div>
 
@@ -172,59 +214,106 @@
     </div>
 
     <div id="panel">
-      <!-- Screen Viewer -->
-      <div class="section">
-        <h3>Screen</h3>
-        <button class="btn btn-blue" id="btn-screenshot">Capture</button>
-        <div id="screen-viewer" style="margin-top:8px;">
-          <div class="no-screenshot" id="no-shot-msg">No screenshots yet</div>
-          <img id="screen-img" alt="" style="display:none;">
-        </div>
-        <div id="screen-nav" style="display:none;">
-          <button id="btn-prev">&lt;</button>
-          <span id="screen-counter">0/0</span>
-          <button id="btn-del" style="color:#ef4444;">Del</button>
-          <button id="btn-next">&gt;</button>
-        </div>
-        <div id="screen-time"></div>
+      <!-- Tab bar -->
+      <div id="tabs">
+        <button class="tab active" data-tab="screen">Screen</button>
+        <button class="tab" data-tab="action">Action</button>
+        <button class="tab" data-tab="ai">AI</button>
       </div>
 
-      <!-- Move -->
-      <div class="section">
-        <h3>Move</h3>
-        <div class="row">
-          <label>X:</label><input type="number" id="target-x" value="500" min="0">
+      <!-- Screen tab -->
+      <div class="tab-content active" id="tab-screen">
+        <div class="card">
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btn-screenshot">Full Screen</button>
+            <button class="btn btn-ghost" id="btn-screenshot-win">Window</button>
+          </div>
         </div>
-        <div class="row">
-          <label>Y:</label><input type="number" id="target-y" value="300" min="0">
+        <div class="card">
+          <div id="screen-viewer">
+            <div class="empty-msg" id="no-shot-msg">No screenshots yet</div>
+            <img id="screen-img" alt="" style="display:none;">
+          </div>
+          <div id="screen-nav" style="display:none;">
+            <button id="btn-prev">&lt;</button>
+            <span id="screen-counter">0/0</span>
+            <button id="btn-del" style="color:#ef4444;">Del</button>
+            <button id="btn-next">&gt;</button>
+          </div>
+          <div id="screen-time"></div>
         </div>
-        <button class="btn btn-green" id="btn-move">Go</button>
-        <div class="status" id="move-status"></div>
       </div>
 
-      <!-- Click -->
-      <div class="section">
-        <h3>Click</h3>
-        <div class="row">
-          <label>X:</label><input type="number" id="click-x" value="500" min="0">
+      <!-- Action tab -->
+      <div class="tab-content" id="tab-action">
+        <!-- Apps -->
+        <div class="card">
+          <div class="card-title">Focus App</div>
+          <div id="apps-list" style="display:flex;flex-wrap:wrap;gap:4px;">
+            <span style="color:#444;font-size:0.72rem;">Loading...</span>
+          </div>
         </div>
-        <div class="row">
-          <label>Y:</label><input type="number" id="click-y" value="300" min="0">
+
+        <!-- Build steps -->
+        <div class="card">
+          <div class="card-title">Add Steps</div>
+          <div class="field">
+            <label>X:</label><input type="number" id="target-x" value="500" min="0">
+          </div>
+          <div class="field">
+            <label>Y:</label><input type="number" id="target-y" value="300" min="0">
+          </div>
+          <input type="text" class="text-input" id="type-text" placeholder="Text (for type actions)">
+          <div class="btn-row" style="margin-bottom:4px;">
+            <button class="btn btn-ghost" id="btn-add-move">+ Move</button>
+            <button class="btn btn-ghost" id="btn-add-click">+ Click</button>
+          </div>
+          <div class="btn-row" style="margin-bottom:4px;">
+            <button class="btn btn-ghost" id="btn-add-type">+ Type</button>
+            <button class="btn btn-ghost" id="btn-add-click-type">+ Click & Type</button>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-ghost" id="btn-add-enter">+ Enter</button>
+            <button class="btn btn-ghost" id="btn-add-tab">+ Tab</button>
+            <button class="btn btn-ghost" id="btn-add-esc">+ Esc</button>
+          </div>
+          <div class="btn-row" style="margin-top:4px;">
+            <button class="btn btn-ghost" id="btn-add-shot-screen">+ Screenshot (Full)</button>
+            <button class="btn btn-ghost" id="btn-add-shot-window">+ Screenshot (Window)</button>
+          </div>
         </div>
-        <button class="btn btn-purple" id="btn-click">Go & Click</button>
+
+        <!-- Queue -->
+        <div class="card" style="flex:1;min-height:0;">
+          <div class="card-title">Queue</div>
+          <div id="queue-list" style="display:flex;flex-direction:column;gap:4px;overflow-y:auto;max-height:200px;">
+            <span class="empty-msg">No steps added</span>
+          </div>
+          <div class="btn-row" style="margin-top:8px;">
+            <button class="btn btn-primary" id="btn-execute">Execute All</button>
+            <button class="btn btn-red" id="btn-clear-queue">Clear</button>
+          </div>
+          <div class="status" id="queue-status"></div>
+        </div>
       </div>
 
-      <!-- AI -->
-      <div class="section">
-        <h3>AI Agent</h3>
-        <input type="text" id="ai-task" placeholder="Describe what to do...">
-        <button class="btn btn-purple" id="btn-ai-run">Run</button>
-        <div class="status" id="ai-status"></div>
-      </div>
+      <!-- AI tab -->
+      <div class="tab-content" id="tab-ai">
+        <div class="card">
+          <div class="card-title">Task</div>
+          <input type="text" class="text-input" id="ai-task" placeholder="What should Piggy do?">
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btn-ai-run">Run</button>
+            <button class="btn btn-red" id="btn-stop-ai">Stop</button>
+          </div>
+        </div>
 
-      <!-- Stop -->
-      <div class="section">
-        <button class="btn btn-red" id="btn-stop">Stop</button>
+        <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+          <div class="card-title">Steps</div>
+          <div id="ai-chat" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;max-height:400px;">
+            <span class="empty-msg">No task running</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>

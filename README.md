@@ -4,40 +4,64 @@
 
 # Piggy
 
-A 3D mouse simulator that controls your real cursor. Built with Electron + Three.js + RobotJS.
+An open-source computer-use agent toolkit. 3D simulated mouse and keyboard that control your real cursor with human-like bezier paths and hardware-level input events.
 
-Piggy renders a 3D mouse on a virtual desk. When you move it — with keyboard or by entering coordinates — your real macOS cursor follows along a human-like bezier curve. It also captures full-screen screenshots for visual context.
+Built with Electron, Three.js, and a custom C driver (CoreGraphics on macOS).
 
-## What works
+## What it does
 
-- **3D mouse on a desk** — rendered with Three.js, LED glow, tilt physics, trail particles
-- **WASD control** — move the 3D mouse and your real cursor follows
-- **Move to coordinates** — enter X,Y, a bezier path is generated, mouse follows it with ease-in-out timing and micro-jitter
-- **Click at coordinates** — moves to position then clicks
-- **Screenshot capture** — captures full screen, displays on a 3D monitor in the scene and in the side panel with history navigation (prev/next/delete)
-- **3D monitor** — a virtual screen on the desk shows the latest screenshot, like the AI's eyes
-- **Path visualization** — planned path shows as a dotted green line on the 3D desk before execution
-- **Camera control** — Shift+Scroll to zoom, Shift+Drag to rotate the view
-- **Speed control** — adjustable movement speed slider
-- **Stop button** — cancel any movement mid-path
+### Tested and working
+- **3D mouse + keyboard on a desk** — Three.js scene with LED glow, tilt physics, trail particles, keys that light up when pressed
+- **3D monitor** — shows live screenshots of your screen inside the simulation
+- **Human-like mouse movement** — bezier curves with micro-jitter and ease-in-out timing
+- **Hardware-level input** — custom C driver using CoreGraphics `kCGHIDEventTap`. Events are indistinguishable from real hardware. Falls back to RobotJS if native driver isn't available
+- **Key-by-key typing** — each character typed individually with human-like delays, handles special characters (@, #, etc.)
+- **Action queue** — build sequences of move, click, type, key press, screenshot and execute them all in order
+- **App focus** — select which app to target before executing. Focus happens first, then actions
+- **Screenshot capture** — full screen or window-only, viewable on 3D monitor with history navigation
 
-## What's in progress
-
-- **AI agent** — the architecture is built to connect a vision model (GPT-4o) that sees screenshots and decides where to move/click. The code is written but not yet tested with a live API key. Don't take our word for it until we confirm it works.
+### Built but not yet tested with live API
+- **AI agent** — vision model loop that sees screenshots and decides actions. Supports single and batch sequences. Conversation history with screenshot thumbnails sent between steps so the model remembers what it did
+- **Multi-model support** — auto-detects provider from env: OpenAI (GPT-4o), Anthropic (Claude), Google (Gemini)
+- **Accessibility API** — queries macOS for UI element positions by name. AI can find buttons, text fields, links without guessing from screenshots
+- **Window management** — list, resize, move, minimize, close windows via System Events
+- **Security confirmations** — dangerous actions (Cmd+Q, Cmd+W, sensitive text) trigger a confirmation dialog before executing
+- **Skill system** — pluggable tools: clipboard read/write, safe shell commands, URL opening. Extensible with custom skills
 
 ## Setup
 
+### macOS
+
 ```bash
-git clone git@github.com:aidrissi1/piggy.git
-cd piggy
+git clone https://github.com/aidrissi1/Piggy.git
+cd Piggy
 npm install
+cd native && npx node-gyp rebuild && cd ..
 npx electron-rebuild
 ```
 
-Create a `.env` file (optional, only needed for AI features):
+### Windows
+
+RobotJS requires C++ build tools. Run in PowerShell as Administrator:
+```
+winget install Microsoft.VisualStudio.2022.BuildTools --force --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools;includeRecommended"
+```
+Then:
+```bash
+npm install
+npx electron-rebuild
+```
+The native C driver is macOS-only. Windows uses RobotJS fallback automatically.
+
+### Environment (optional, for AI features)
+
+Create a `.env` file with one of these:
 ```
 OPENAI_API_KEY=sk-your-key-here
+# ANTHROPIC_API_KEY=sk-ant-your-key-here
+# GEMINI_API_KEY=your-key-here
 ```
+Piggy auto-detects which provider to use.
 
 ## Run
 
@@ -46,8 +70,8 @@ npm start
 ```
 
 **macOS permissions needed:**
-- **Accessibility** — allows cursor control (System Settings → Privacy & Security → Accessibility → enable Terminal)
-- **Screen Recording** — allows screenshots (System Settings → Privacy & Security → Screen Recording → enable Terminal)
+- **Accessibility** — System Settings → Privacy & Security → Accessibility → enable Terminal
+- **Screen Recording** — System Settings → Privacy & Security → Screen Recording → enable Terminal
 
 ## Controls
 
@@ -56,29 +80,38 @@ npm start
 | W/A/S/D | Move mouse |
 | Space | Click |
 | Q/E | Scroll up/down |
-| Shift+Scroll | Zoom camera in/out |
-| Shift+Drag | Rotate camera |
-| Tab | Toggle keyboard/AI mode indicator |
+| Ctrl+Scroll | Zoom camera |
+| Shift+Drag | Orbit camera |
 
-The right panel has manual controls: coordinate input for Move and Click, screenshot capture with history and delete, and an AI task input (requires API key).
+### Panel tabs
 
-## Tech
+- **Screen** — capture full screen or window, browse history with prev/next/delete
+- **Action** — select target app, set coordinates, build a queue of actions, execute all
+- **AI** — enter a task for the AI agent, watch each step with screenshots in chat view
 
-- **Electron** — desktop app shell
-- **Three.js** — 3D rendering
-- **RobotJS** — native cursor control
-- **OpenAI SDK** — vision model integration (when API key is configured)
-
-## Structure
+## Architecture
 
 ```
-main.js          — Electron main process, IPC handlers
-renderer.js      — Three.js scene, UI logic, screenshot viewer
-index.html       — Layout and styles
-path-engine.js   — Bezier curve generation with jitter and easing
-executor.js      — Supervised path execution with checkpoint support
-ai-controller.js — Vision model loop (screenshot → decide → act → repeat)
+input.js           — input abstraction: tries native C driver, falls back to RobotJS
+native/            — C addon: CoreGraphics kCGHIDEventTap mouse/keyboard (macOS)
+executor.js        — path execution, key-by-key typing, supervised movement
+path-engine.js     — quadratic bezier curve generation with jitter and easing
+main.js            — Electron main process, IPC handlers, screenshots, app focus
+renderer.js        — Three.js 3D scene, UI logic, queue system, tab panel
+ai-controller.js   — vision model loop with conversation history and batch support
+model-provider.js  — multi-model abstraction: OpenAI, Anthropic, Gemini
+accessibility.js   — macOS Accessibility API queries for UI element positions
+windows.js         — window management: list, resize, move, minimize, close
+skills.js          — pluggable skill system with built-in clipboard, shell, URL skills
+index.html         — layout, styles, tabbed panel
 ```
+
+## What's next
+
+- Test AI agent with live API key
+- Windows native C driver (SendInput)
+- UI redesign — floating toolbar instead of side panel
+- Memory engine — separate project for persistent AI context across sessions
 
 ## License
 
