@@ -17,6 +17,10 @@ const { generatePath } = require('./path-engine');
 
 let taskSeq    = 0;   // monotonic — bump to cancel current task
 let executing  = false;
+let visualMode = false; // false = instant execution, true = animated bezier paths
+
+/** Set execution mode. */
+function setVisualMode(enabled) { visualMode = !!enabled; }
 
 /**
  * Follow a bezier path from the current cursor position to (targetX, targetY).
@@ -34,6 +38,15 @@ async function executeMove(targetX, targetY, opts = {}) {
   const id = ++taskSeq;
   executing = true;
 
+  // Fast mode: teleport cursor directly
+  if (!visualMode) {
+    input.moveMouse(targetX, targetY);
+    if (opts.onStep) opts.onStep(targetX, targetY, 1);
+    executing = false;
+    return { completed: true, cancelled: false, stopped: false, position: { x: targetX, y: targetY } };
+  }
+
+  // Visual mode: animated bezier path
   const start  = input.getMousePos();
   const points = generatePath(start.x, start.y, targetX, targetY, opts.pathOptions || {});
 
@@ -81,7 +94,7 @@ async function executeMove(targetX, targetY, opts = {}) {
 async function executeClick(x, y, button = 'left', opts = {}) {
   const result = await executeMove(x, y, opts);
   if (result.completed) {
-    await new Promise(r => setTimeout(r, 30 + Math.random() * 50));
+    if (visualMode) await new Promise(r => setTimeout(r, 30 + Math.random() * 50));
     input.clickMouse(x, y, button === 'right' ? 1 : 0);
     return { ...result, clicked: true };
   }
@@ -119,17 +132,20 @@ async function executeType(text, opts = {}) {
     } else if (char === '\t') {
       input.keyTap('tab');
     } else {
-      // typeChar handles all characters via CoreGraphics Unicode
       input.typeChar(char);
     }
 
     if (opts.onKey) opts.onKey(char, i, text.length);
 
-    // Human-like delay: 25-80ms between keys, occasional brief pause
-    const pause = Math.random() < 0.08
-      ? 100 + Math.random() * 80    // occasional thinking pause
-      : 25 + Math.random() * 55;    // fast but natural typing
-    await new Promise(r => setTimeout(r, pause));
+    // Fast mode: 2ms between keys. Visual mode: human-like delays.
+    if (visualMode) {
+      const pause = Math.random() < 0.08
+        ? 100 + Math.random() * 80
+        : 25 + Math.random() * 55;
+      await new Promise(r => setTimeout(r, pause));
+    } else {
+      await new Promise(r => setTimeout(r, 2));
+    }
   }
 
   executing = false;
@@ -165,4 +181,4 @@ function getStatus() {
   return { executing, cursor: input.getMousePos() };
 }
 
-module.exports = { executeMove, executeClick, executeScroll, executeType, executeKeyPress, stopMovement, getStatus };
+module.exports = { executeMove, executeClick, executeScroll, executeType, executeKeyPress, stopMovement, getStatus, setVisualMode };

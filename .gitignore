@@ -1,3 +1,9 @@
 node_modules/
 native/build/
 .env
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+memory/
+skills-learned/

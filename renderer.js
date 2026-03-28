@@ -36,12 +36,16 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0a12);
 scene.fog = new THREE.Fog(0x0a0a12, 15, 30);
 
-const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 100);
+// Use fallback size since sim page may be hidden on init
+const initW = container.clientWidth || 800;
+const initH = container.clientHeight || 600;
+
+const camera = new THREE.PerspectiveCamera(50, initW / initH, 0.1, 100);
 camera.position.set(0, 6, 8);
 camera.lookAt(0, 0, 0);
 
 const gl = new THREE.WebGLRenderer({ canvas, antialias: true });
-gl.setSize(container.clientWidth, container.clientHeight);
+gl.setSize(initW, initH);
 gl.setPixelRatio(window.devicePixelRatio);
 gl.shadowMap.enabled = true;
 gl.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -353,14 +357,14 @@ ipcRenderer.on('key-pressed', (_, { char }) => { flashKey(char); });
 ipcRenderer.on('ai-step', (_, info) => {
   const chat = document.getElementById('ai-chat');
 
-  // Clear "no task" message on first step
-  if (info.step === 1 && info.status === 'thinking') {
-    chat.innerHTML = '';
-  }
+  // Remove the initial "Talk to Piggy" message if still present
+  const emptyMsg = chat.querySelector('.empty-msg');
+  if (emptyMsg) emptyMsg.remove();
 
   // Build action description
   let body = '';
   if (info.status === 'thinking') body = 'Analyzing screenshot...';
+  else if (info.status === 'recalling') body = `Searching memory: "${info.action?.query || '...'}"`;
   else if (info.status === 'acting') {
     const a = info.action;
     if (a.action === 'batch') {
@@ -372,6 +376,7 @@ ipcRenderer.on('ai-step', (_, info) => {
         if (act.action === 'key') return `${i+1}. Key → ${act.key}`;
         if (act.action === 'shortcut') return `${i+1}. ${(act.modifiers||[]).join('+')}+${act.key}`;
         if (act.action === 'scroll') return `${i+1}. Scroll ${act.direction}`;
+        if (act.action === 'find') return `${i+1}. Find → "${act.name}"`;
         return `${i+1}. ${act.action}`;
       }).join('<br>');
     } else {
@@ -382,12 +387,14 @@ ipcRenderer.on('ai-step', (_, info) => {
       else if (a.action === 'key') body = `Key → ${a.key}`;
       else if (a.action === 'shortcut') body = `${(a.modifiers||[]).join('+')}+${a.key}`;
       else if (a.action === 'scroll') body = `Scroll ${a.direction}`;
+      else if (a.action === 'find') body = `Find → "${a.name}"`;
       else body = JSON.stringify(a);
     }
   }
-  else if (info.status === 'done') body = info.reason;
+  else if (info.status === 'done') body = (info.report && info.report.length > 10) ? info.report : info.reason;
   else if (info.status === 'failed') body = info.reason;
   else if (info.status === 'error') body = info.error;
+  else if (info.status === 'blocked') body = info.reason;
 
   // Find or create step element
   let stepEl = document.getElementById(`ai-step-${info.step}`);
@@ -407,7 +414,6 @@ ipcRenderer.on('ai-step', (_, info) => {
     ${info.screenshot ? `<img class="chat-step-img" src="data:image/png;base64,${info.screenshot}">` : ''}
   `;
 
-  // Auto-scroll to bottom
   chat.scrollTop = chat.scrollHeight;
 });
 
@@ -484,14 +490,24 @@ document.getElementById('btn-del').addEventListener('click', () => {
   }
 });
 
-// ── Tab switching ─────────────────────────────────────────
+// ── Page navigation ───────────────────────────────────────
 
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const page = btn.dataset.page;
+    if (!page) return;
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('page-' + page).classList.add('active');
+
+    // Resize Three.js canvas when switching to sim page
+    if (page === 'sim') {
+      const c = document.getElementById('scene-container');
+      camera.aspect = c.clientWidth / c.clientHeight;
+      camera.updateProjectionMatrix();
+      gl.setSize(c.clientWidth, c.clientHeight);
+    }
   });
 });
 
@@ -534,7 +550,7 @@ async function focusSelected() {
 }
 
 loadApps();
-document.querySelector('[data-tab="action"]').addEventListener('click', loadApps);
+document.querySelector('[data-page="action"]').addEventListener('click', loadApps);
 
 // ── Action tab — Queue system ─────────────────────────────
 
@@ -721,23 +737,224 @@ document.getElementById('btn-execute').addEventListener('click', async () => {
   btn.disabled = false;
 });
 
-// ── AI tab ────────────────────────────────────────────────
+// ── AI Queue Execution (AI pushes actions here) ──────────
 
-document.getElementById('btn-ai-run').addEventListener('click', async () => {
-  const task = document.getElementById('ai-task').value.trim();
-  if (!task) return;
-  const btn = document.getElementById('btn-ai-run');
-  const chat = document.getElementById('ai-chat');
+ipcRenderer.on('ai-queue-actions', (_, { actions, step }) => {
+  // Clear existing queue
+  queue.length = 0;
 
-  btn.disabled = true; btn.textContent = '...';
-  chat.innerHTML = '<span class="empty-msg">Starting...</span>';
+  // Add AI actions to the queue
+  for (const action of actions) {
+    switch (action.action) {
+      case 'focus':
+        queue.push({ action: 'focus', app: action.app });
+        break;
+      case 'click':
+      case 'right_click':
+        queue.push({ action: 'click', x: action.x, y: action.y });
+        break;
+      case 'click_type':
+        queue.push({ action: 'click_type', x: action.x, y: action.y, text: action.text || '' });
+        break;
+      case 'move':
+        queue.push({ action: 'move', x: action.x, y: action.y });
+        break;
+      case 'type':
+        queue.push({ action: 'type', text: action.text || '' });
+        break;
+      case 'key':
+        queue.push({ action: 'key', key: action.key });
+        break;
+      case 'shortcut':
+        // Shortcuts become key actions with modifiers handled via IPC
+        queue.push({ action: 'shortcut', key: action.key, modifiers: action.modifiers || [] });
+        break;
+      case 'scroll':
+        queue.push({ action: 'scroll', direction: action.direction, amount: action.amount || 3 });
+        break;
+      case 'find':
+        queue.push({ action: 'find', name: action.name });
+        break;
+    }
+  }
+
+  renderQueue();
+
+  // Auto-switch to Action page so user sees the queue
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelector('[data-page="action"]').classList.add('active');
+  document.getElementById('page-action').classList.add('active');
+});
+
+ipcRenderer.on('ai-execute-queue', async () => {
+  if (!queue.length) {
+    ipcRenderer.send('ai-queue-done', { success: true, steps: 0 });
+    return;
+  }
+
+  const st = document.getElementById('queue-status');
+  const btn = document.getElementById('btn-execute');
+  btn.disabled = true;
+
+  for (let i = 0; i < queue.length; i++) {
+    const step = queue[i];
+    const el = document.getElementById(`queue-item-${i}`);
+    if (el) el.className = 'queue-item running';
+    st.textContent = `AI running step ${i + 1}/${queue.length}...`;
+    st.style.color = '#f59e0b';
+
+    switch (step.action) {
+      case 'focus':
+        if (step.app) {
+          await ipcRenderer.invoke('focus-app', { appName: step.app });
+          await new Promise(r => setTimeout(r, 300));
+        }
+        break;
+      case 'move': {
+        const pv = await api.previewPath(step.x, step.y);
+        showPath(pv.points, screenW, screenH);
+        await api.executeMove(step.x, step.y);
+        clearPath();
+        break;
+      }
+      case 'click': {
+        const pv = await api.previewPath(step.x, step.y);
+        showPath(pv.points, screenW, screenH);
+        const res = await api.executeClick(step.x, step.y, 'left');
+        if (res.clicked) clickFlash = 1;
+        clearPath();
+        break;
+      }
+      case 'click_type': {
+        const pv = await api.previewPath(step.x, step.y);
+        showPath(pv.points, screenW, screenH);
+        await api.executeMove(step.x, step.y);
+        clearPath();
+        await api.clickCursor('left');
+        clickFlash = 1;
+        await new Promise(r => setTimeout(r, 400));
+        await api.executeType(step.text);
+        break;
+      }
+      case 'type':
+        await api.executeType(step.text);
+        break;
+      case 'key':
+        api.executeKey(step.key);
+        await new Promise(r => setTimeout(r, 50));
+        break;
+      case 'shortcut':
+        api.executeKey(step.key, step.modifiers);
+        await new Promise(r => setTimeout(r, 50));
+        break;
+      case 'scroll':
+        api.scrollCursor(step.direction === 'up' ? -(step.amount || 3) : (step.amount || 3));
+        break;
+      case 'find': {
+        const found = await ipcRenderer.invoke('find-element', { name: step.name });
+        if (found.success && found.element) {
+          st.textContent = `Found "${step.name}" at (${found.element.centerX}, ${found.element.centerY})`;
+        } else {
+          st.textContent = `"${step.name}" not found`;
+        }
+        // Send find result back to main for the AI to use
+        ipcRenderer.send('ai-find-result', found);
+        break;
+      }
+    }
+
+    if (el) el.className = 'queue-item done';
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  st.textContent = `Done — ${queue.length} steps executed`;
+  st.style.color = '#10b981';
+  btn.disabled = false;
+
+  // Take screenshot after execution and send back to AI
+  const shot = await api.takeScreenshot('window');
+  if (shot.smallBase64) {
+    updateMonitorScreen(shot.smallBase64);
+  }
+  ipcRenderer.send('ai-queue-done', { success: true, steps: queue.length, screenshot: shot });
+});
+
+// Update describeStep to handle new action types
+const origDescribeStep = describeStep;
+function describeStepExtended(step) {
+  if (step.action === 'focus') return `Focus → ${step.app}`;
+  if (step.action === 'shortcut') return `Shortcut → ${[...(step.modifiers || []), step.key].join('+')}`;
+  if (step.action === 'scroll') return `Scroll ${step.direction || 'down'}`;
+  if (step.action === 'find') return `Find → "${step.name}"`;
+  return origDescribeStep(step);
+}
+// Replace describeStep
+describeStep = describeStepExtended;
+
+// ── AI tab — Chat + Task ─────────────────────────────────
+
+let aiTaskRunning = false;
+let pendingTask = null;
+
+const chatEl = document.getElementById('ai-chat');
+const inputEl = document.getElementById('ai-input');
+const sendBtn = document.getElementById('btn-ai-send');
+const badge = document.getElementById('ai-mode-badge');
+
+function addChatMsg(role, text) {
+  const msg = document.createElement('div');
+  msg.className = `chat-msg ${role}`;
+  msg.innerHTML = text;
+  chatEl.appendChild(msg);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return msg;
+}
+
+function setBadge(mode) {
+  badge.textContent = mode;
+  badge.className = mode === 'task' ? 'ai-badge task-mode' : 'ai-badge chat-mode';
+}
+
+async function sendChat() {
+  const text = inputEl.value.trim();
+  if (!text || aiTaskRunning) return;
+
+  inputEl.value = '';
+  addChatMsg('user', text);
+  sendBtn.disabled = true; sendBtn.textContent = '...';
+
+  const res = await ipcRenderer.invoke('ai-chat', { message: text, includeScreenshot: false });
+
+  sendBtn.disabled = false; sendBtn.textContent = 'Send';
+
+  if (res.ready && res.task) {
+    // Model wants to execute — show the plan and a "Go" button
+    const msgEl = addChatMsg('assistant', `${escHtml(res.reply)}<br><button class="ready-btn" id="btn-go-task">Execute task</button>`);
+    pendingTask = res.task;
+
+    msgEl.querySelector('#btn-go-task').addEventListener('click', () => {
+      runTaskFromChat(pendingTask);
+      pendingTask = null;
+    });
+  } else {
+    addChatMsg('assistant', escHtml(res.reply));
+  }
+}
+
+async function runTaskFromChat(task) {
+  aiTaskRunning = true;
+  setBadge('task');
   mode = 'ai';
   document.getElementById('mode-indicator').textContent = 'AI';
   document.getElementById('mode-indicator').className = 'ai';
 
-  const res = await ipcRenderer.invoke('ai-run-task', { task, maxSteps: 15 });
+  addChatMsg('system', `Executing: ${escHtml(task)}`);
+  sendBtn.disabled = true; inputEl.disabled = true;
 
-  // Add final result to chat
+  const res = await ipcRenderer.invoke('ai-run-from-chat', { task, maxSteps: 15 });
+
+  // Final result
   const final = document.createElement('div');
   final.className = 'chat-step';
   final.innerHTML = `
@@ -747,19 +964,36 @@ document.getElementById('btn-ai-run').addEventListener('click', async () => {
     </div>
     <div class="chat-step-body">${res.reason} (${res.steps} steps)</div>
   `;
-  chat.appendChild(final);
-  chat.scrollTop = chat.scrollHeight;
+  chatEl.appendChild(final);
+  chatEl.scrollTop = chatEl.scrollHeight;
 
-  btn.disabled = false; btn.textContent = 'Run';
+  aiTaskRunning = false;
+  setBadge('chat');
+  sendBtn.disabled = false; inputEl.disabled = false;
   mode = 'keyboard';
   document.getElementById('mode-indicator').textContent = 'KEYBOARD';
   document.getElementById('mode-indicator').className = 'keyboard';
+}
+
+function escHtml(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
+
+sendBtn.addEventListener('click', sendChat);
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
 
 document.getElementById('btn-stop-ai').addEventListener('click', async () => {
   await ipcRenderer.invoke('ai-stop');
   await api.stopMovement();
   clearPath();
+  if (aiTaskRunning) {
+    addChatMsg('system', 'Task stopped by user');
+    aiTaskRunning = false;
+    setBadge('chat');
+    sendBtn.disabled = false; inputEl.disabled = false;
+  }
 });
 
 // ── Animation Loop ────────────────────────────────────────
@@ -877,7 +1111,9 @@ animate();
 
 window.addEventListener('resize', () => {
   const w = container.clientWidth, h = container.clientHeight;
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-  gl.setSize(w, h);
+  if (w > 0 && h > 0) {
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    gl.setSize(w, h);
+  }
 });

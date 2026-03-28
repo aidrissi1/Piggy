@@ -115,4 +115,4 @@ index.html         — layout, styles, tabbed panel
 
 ## License
 
-MIT — Idrissi
+Apache 2.0 — Idrissi

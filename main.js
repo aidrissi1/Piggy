@@ -18,8 +18,10 @@ const { generatePath, estimateDuration } = require('./path-engine');
 const { executeMove, executeClick, executeScroll, executeType, executeKeyPress, stopMovement, getStatus } = require('./executor');
 const ai = require('./ai-controller');
 const a11y = require('./accessibility');
+const vision = require('./vision');
 const win = require('./windows');
 const skills = require('./skills');
+const cdp = require('./cdp-adapter');
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 ai.init(); // auto-detects provider from OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY
@@ -93,20 +95,50 @@ ipcMain.handle('list-apps', async () => {
   }
 });
 
-ipcMain.handle('focus-app', async (_, { appName }) => {
+/** CDP debugging port for Brave/Chrome */
+const CDP_PORT = 9222;
+
+/**
+ * Launch or focus an app. For Brave/Chrome, launches with CDP debugging enabled.
+ */
+async function launchApp(appName) {
   const safe = sanitizeAppName(appName);
   if (!safe) return { success: false, error: 'Invalid app name' };
+
+  const isBrave = safe.toLowerCase().includes('brave');
+  const isChrome = safe.toLowerCase().includes('chrome');
+
   try {
-    execSync(
-      `osascript -e 'tell application "System Events" to set frontmost of process "${safe}" to true'`,
-      { encoding: 'utf8', timeout: 3000 }
-    );
-    await new Promise(r => setTimeout(r, 300));
+    if (isBrave || isChrome) {
+      // Launch with remote debugging port for CDP
+      try {
+        execSync(`open -a "${safe}" --args --remote-debugging-port=${CDP_PORT}`, { encoding: 'utf8', timeout: 5000 });
+      } catch {
+        // App may already be running — just focus it
+        execSync(`open -a "${safe}"`, { encoding: 'utf8', timeout: 5000 });
+      }
+      await new Promise(r => setTimeout(r, 1500)); // give CDP time to start
+
+      // Auto-connect CDP if not connected
+      if (!cdp.isConnected()) {
+        try {
+          await cdp.connect(CDP_PORT);
+          console.log('[Piggy] CDP auto-connected to', safe);
+        } catch (err) {
+          console.warn(`[Piggy] CDP connect to ${safe} failed: ${err.message}`);
+        }
+      }
+    } else {
+      execSync(`open -a "${safe}"`, { encoding: 'utf8', timeout: 5000 });
+      await new Promise(r => setTimeout(r, 800));
+    }
     return { success: true, app: safe };
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
+}
+
+ipcMain.handle('focus-app', async (_, { appName }) => launchApp(appName));
 
 // ── Window Management ─────────────────────────────────────
 
@@ -241,6 +273,73 @@ ipcMain.handle('confirm-action', async (_, { action, description }) => {
 
 // ── AI ────────────────────────────────────────────────────
 
+// Queue-based execution: send actions to renderer, wait for completion
+function sendToQueue(actions, step) {
+  return new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      resolve({ success: false, steps: 0 });
+      return;
+    }
+    // Listen for queue completion
+    const handler = (_, result) => {
+      ipcMain.removeListener('ai-queue-done', handler);
+      resolve(result);
+    };
+    ipcMain.on('ai-queue-done', handler);
+
+    // Send actions to renderer queue and trigger execution
+    mainWindow.webContents.send('ai-queue-actions', { actions, step });
+    setTimeout(() => {
+      mainWindow.webContents.send('ai-execute-queue');
+    }, 200); // small delay to let queue render
+  });
+}
+
+function buildTaskOpts(apps, maxSteps) {
+  return {
+    maxSteps: maxSteps || 25,
+    apps,
+    captureScreen: takeScreenshot,
+    getCursorPos: () => input.getMousePos(),
+    focusApp: async (appName) => {
+      await launchApp(appName);
+    },
+    executeClick: async (x, y, button) => {
+      return executeClick(x, y, button || 'left');
+    },
+    executeType: async (text) => {
+      return executeType(text);
+    },
+    executeKey: (key, modifiers) => {
+      return executeKeyPress(key, modifiers || []);
+    },
+    executeScroll: (amount) => {
+      return executeScroll(amount);
+    },
+    navigateBrowser: async (url, appName) => {
+      try {
+        const safeUrl = url.replace(/'/g, '');
+        if (vision.isCDPBrowser(appName)) {
+          // CDP navigation for Brave/Chrome
+          if (!cdp.isConnected()) await cdp.connect(CDP_PORT);
+          await cdp.navigateTo(safeUrl);
+        } else {
+          // AppleScript navigation for Safari
+          execSync(
+            `osascript -e 'tell application "Safari" to set URL of current tab of window 1 to "${safeUrl}"'`,
+            { encoding: 'utf8', timeout: 10000 }
+          );
+        }
+      } catch (err) {
+        console.warn('[Piggy] Navigate failed:', err.message);
+      }
+    },
+    onStep: (info) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ai-step', info);
+    }
+  };
+}
+
 ipcMain.handle('ai-run-task', async (_, { task, maxSteps }) => {
   let apps = [];
   try {
@@ -251,49 +350,56 @@ ipcMain.handle('ai-run-task', async (_, { task, maxSteps }) => {
     apps = raw.split(', ').filter(a => a && a !== 'Piggy').sort();
   } catch {}
 
-  return ai.runTask(task, {
-    maxSteps: maxSteps || 15,
-    apps,
-    captureScreen: takeScreenshot,
-    getCursorPos: () => input.getMousePos(),
-    focusApp: async (appName) => {
-      const safe = sanitizeAppName(appName);
-      if (!safe) return;
-      try {
-        execSync(
-          `osascript -e 'tell application "System Events" to set frontmost of process "${safe}" to true'`,
-          { encoding: 'utf8', timeout: 3000 }
-        );
-        await new Promise(r => setTimeout(r, 300));
-      } catch {}
-    },
-    findElement: async (name) => a11y.findElement(name),
-    getUISummary: () => a11y.getElementsSummary(),
-    confirmAction: async (action, description) => {
-      const { dialog } = require('electron');
-      const result = await dialog.showMessageBox(mainWindow, {
-        type: 'warning',
-        buttons: ['Allow', 'Deny'],
-        defaultId: 1,
-        cancelId: 1,
-        title: 'Piggy — Action Confirmation',
-        message: `AI wants to: ${description}`,
-        detail: `Allow this action?`
-      });
-      return { approved: result.response === 0 };
-    },
-    onStep: (info) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ai-step', info);
-    },
-    onMouseMove: sendPos
-  });
+  return ai.runTask(task, buildTaskOpts(apps, maxSteps));
 });
 
 ipcMain.handle('ai-stop', () => { ai.stop(); stopMovement(); return { stopped: true }; });
 
 ipcMain.handle('ai-status', () => ai.status());
 
+// ── Chat ─────────────────────────────────────────────────
+
+ipcMain.handle('ai-chat', async (_, { message, includeScreenshot }) => {
+  let screenshot = null;
+  if (includeScreenshot) {
+    try {
+      const shot = await takeScreenshot();
+      screenshot = shot.smallBase64;
+    } catch (_) {}
+  }
+  // Get running apps so the model knows what it can focus
+  let apps = [];
+  try {
+    const raw = execSync(
+      `osascript -e 'tell application "System Events" to get name of every application process whose visible is true'`,
+      { encoding: 'utf8', timeout: 3000 }
+    ).trim();
+    apps = raw.split(', ').filter(a => a && a !== 'Piggy').sort();
+  } catch (_) {}
+  return ai.chat(message, { screenshot, apps });
+});
+
+ipcMain.handle('ai-chat-history', () => ai.getChatHistory());
+
+ipcMain.handle('ai-clear-chat', () => { ai.clearChat(); return { cleared: true }; });
+
+ipcMain.handle('ai-run-from-chat', async (_, { task, maxSteps }) => {
+  let apps = [];
+  try {
+    const raw = execSync(
+      `osascript -e 'tell application "System Events" to get name of every application process whose visible is true'`,
+      { encoding: 'utf8', timeout: 3000 }
+    ).trim();
+    apps = raw.split(', ').filter(a => a && a !== 'Piggy').sort();
+  } catch {}
+
+  return ai.runTaskFromChat(task, buildTaskOpts(apps, maxSteps));
+});
+
 // ── App lifecycle ─────────────────────────────────────────
 
 app.whenReady().then(createWindow);
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => {
+  cdp.disconnect();
+  app.quit();
+});
